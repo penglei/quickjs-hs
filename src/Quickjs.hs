@@ -16,7 +16,7 @@
 --
 -- The current functionality includes evaluating JS code, calling a JS function in the global scope
 -- and marshalling 'Value's to and from 'JSValue's.
-module Quickjs (JSValue, JSContextPtr, quickjs, quickjsMultithreaded, call, eval, eval_, evalAs, withJSValue, fromJSValue_) where
+module Quickjs (JSValue, JSContextPtr, quickjs, quickjsMultithreaded, call, eval, eval_, evalAs, withJSValue, fromJSValue_, createQuickjs, freeQuickjs) where
 
 import Control.Concurrent (rtsSupportsBoundThreads, runInBoundThread)
 import Control.Monad (forM_, when)
@@ -537,21 +537,10 @@ freeJSValue val = do
 -- >  liftIO $ print res
 quickjs :: (MonadIO m) => ReaderT (Ptr JSContext) m b -> m b
 quickjs f = do
-  (rt, ctx) <- liftIO $ do
-    _rt <- jsNewRuntime
-    _ctx <- jsNewContext _rt
-
-    [C.block| void { js_std_add_helpers($(JSContext *_ctx), -1, NULL); } |]
-
-    return (_rt, _ctx)
-
+  (rt, ctx) <- liftIO createQuickjs
   res <- runReaderT f ctx
-  cleanup ctx rt
+  liftIO $ freeQuickjs ctx rt
   return res
-  where
-    cleanup ctx rt = liftIO $ do
-      jsFreeContext ctx
-      jsFreeRuntime rt
 
 -- |
 -- This env differs from regular 'quickjs', in that it wraps the computation in the 'runInBoundThread' function.
@@ -574,10 +563,20 @@ quickjsMultithreaded f
       } |]
 
         res <- unliftIO u $ runReaderT f ctx
-        cleanup ctx rt
+        freeQuickjs ctx rt
         return res
   | otherwise = quickjs f
-  where
-    cleanup ctx rt = do
-      jsFreeContext ctx
-      jsFreeRuntime rt
+
+createQuickjs :: IO (Ptr JSRuntime, Ptr JSContext)
+createQuickjs = do
+  _rt <- jsNewRuntime
+  _ctx <- jsNewContext _rt
+
+  [C.block| void { js_std_add_helpers($(JSContext *_ctx), -1, NULL); } |]
+
+  return (_rt, _ctx)
+
+freeQuickjs :: Ptr JSContext -> Ptr JSRuntime -> IO ()
+freeQuickjs ctx rt = do
+  jsFreeContext ctx
+  jsFreeRuntime rt
